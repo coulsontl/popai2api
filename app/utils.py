@@ -6,6 +6,8 @@ import logging
 import os
 import re
 from collections import deque
+from dotenv import load_dotenv
+import copy
 
 import requests
 import undetected_chromedriver as uc
@@ -13,26 +15,11 @@ from flask import Response, jsonify
 from pyvirtualdisplay import Display
 from requests.exceptions import ProxyError
 
-from app.config import configure_logging, IMAGE_MODEL_NAMES, ProxyPool, G_TOKEN, POPAI_BASE_URL
+from app.config import configure_logging, IMAGE_MODEL_NAMES, ProxyPool, G_TOKEN, POPAI_BASE_URL, get_env_value
 
 configure_logging()
 proxy_pool = ProxyPool()
 current_token_index = 0
-
-
-def send_http_request(url, headers, data):
-    try:
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        return response
-    except requests.exceptions.RequestException as e:
-        logging.error("HTTP request error: %s", e)
-        raise
-
-
-def get_env_variable(var_name):
-    return os.getenv(var_name)
-
 
 def send_chat_message(req, auth_token, channel_id, final_user_content, model_name, user_stream, image_url,
                       user_model_name):
@@ -277,17 +264,29 @@ def process_msg_content(content):
 def get_user_contents(messages, limit):
     limit = int(limit)
     selected_messages = deque(maxlen=limit)
+    system_content = None
     first_user_message = None
+    user_messages_list = []
 
     # 过滤并处理用户消息
+    # logging.info("get_user_contents messages: %s", messages)
     for message in messages:
-        if message.get("role") == "user":
+        if message['role'] == 'system' and system_content is None:
+            system_content = message['content']
+        elif message.get("role") == "user":
             content = process_msg_content(message.get("content"))
             if content:
-                selected_messages.append(content)
                 if first_user_message is None:
-                    first_user_message = content
-
+                    if system_content is None:
+                        first_user_message = content
+                    else:
+                        first_user_message = f"Your role setting: {system_content}\n\nUser's input: {content}"
+                    selected_messages.append(first_user_message)
+                    user_messages_list.append(first_user_message)
+                else:
+                    selected_messages.append(content)
+                    user_messages_list.append(content)
+    
     # 检查是否有足够的消息
     if selected_messages:
         end_user_message = selected_messages[-1]
@@ -300,25 +299,7 @@ def get_user_contents(messages, limit):
 
     concatenated_messages = ' \n'.join(selected_messages)
 
-    return first_user_message, end_user_message, concatenated_messages
-
-
-# def get_user_contents(messages, limit=3):
-#     user_messages = [str(message.get("content", '')) for message in messages if message.get("role") == "user"]
-#     end_message = user_messages[-1] if user_messages else None
-#     selected_messages = user_messages[-limit-1:-1] if len(user_messages) > limit else user_messages[:-1]
-#     concatenated_messages = ' '.join(selected_messages)
-#     return end_message, concatenated_messages
-
-# def get_user_contents(messages, limit=3):
-#     contents = []
-#     user_content_added = False
-#     for message in messages:
-#         if message.get("role") == "user" and not user_content_added:
-#             contents.append(str(message.get("content", '')))
-#             user_content_added = True
-#     return contents
-
+    return first_user_message, end_user_message, concatenated_messages, user_messages_list
 
 def fetch_channel_id(auth_token, model_name, content, template_id):
     url = "https://api.popai.pro/api/v1/chat/getChannel"
@@ -329,18 +310,18 @@ def fetch_channel_id(auth_token, model_name, content, template_id):
         "App-Name": "popai-web",
         "Authorization": auth_token,
         "Content-Type": "application/json",
-        "Device-Info": '{"web_id":"drBt-M9G_I9eKAgB8TdnY","baidu_id":"18f1fd3dc7749443876b69"}',
+        "Device-Info": '{"web_id":"Tu2oHIR427H5g7_CCOKAE","baidu_id":"18f2e8b7b429216e54da83"}',
         "Language": "en",
         "Origin": "https://www.popai.pro",
         "Referer": "https://www.popai.pro/",
         "Pop-Url": "https://www.popai.pro/creation/All/Image",
-        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
         "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": "Windows",
+        "Sec-Ch-Ua-Platform": "macOS",
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-site",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     }
     data = {
         "model": model_name,
@@ -431,8 +412,29 @@ def get_request_parameters(body):
     model_name = body.get("model")
     prompt = body.get("prompt", False)
     stream = body.get("stream", False)
+    # logging.info("get_request_parameters messages: %s", messages)
     return messages, model_name, prompt, stream
 
+def get_topic_from_headers(headers):
+    # logging.info("get_topic_from_headers: %s", headers)
+    try:
+        # 从提供的headers中获取'Referer'
+        referer_header = headers.get('Referer')
+        if referer_header:
+            # 解析URL
+            parsed_url = urlparse(referer_header)
+            # 获取query部分并解析
+            query_params = parse_qs(parsed_url.query)
+            # 获取topic参数
+            topic_value = query_params.get('topic', [None])[0]
+            return topic_value
+        else:
+            return None
+    except Exception as e:
+        # 日志记录异常
+        logging.error("Error getting topic from headers: %s", str(e))
+        # 根据情况可以返回None或者重新抛出异常
+        return None
 
 def extract_url_from_content(content):
     # 使用正则表达式从 Markdown 内容中提取 URL
@@ -451,7 +453,7 @@ def request_with_proxy_chat(url, headers, data, stream):
 def request_with_proxy(url, headers, data, stream, files):
     try:
         proxies = proxy_pool.get_random_proxy()
-        logging.info("Use proxy url %s", proxies)
+        # logging.info("Use proxy url %s", proxies)
 
         if proxies:
             response = requests.post(url, headers=headers, json=data, stream=stream, files=files, proxies=proxies)
@@ -508,13 +510,17 @@ def get_gtoken():
         options.add_argument('--disable-gpu')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
+        
+        proxies = proxy_pool.get_random_proxy()
+        if 'https' in proxies and '@' not in proxies['https']:
+            options.add_argument(f"--proxy-server={proxies['https']}")
 
         driver = uc.Chrome(options=options)
         try:
             driver.get(POPAI_BASE_URL)
             gtoken = driver.execute_async_script(str_js)
 
-            with open('gtoken.txt', 'a', encoding='utf-8', errors='ignore') as f:
+            with open('gtoken.txt', 'w', encoding='utf-8', errors='ignore') as f:
                 f.write(gtoken)
                 f.write('\n')
         finally:
@@ -531,5 +537,5 @@ def updateGtoken():
     global G_TOKEN
     G_TOKEN = get_gtoken()
     logging.info("G_TOKEN updated successfully")
-    # logging.info("G_TOKEN: %s", G_TOKEN)
+    logging.info("G_TOKEN: %s", G_TOKEN)
     return G_TOKEN

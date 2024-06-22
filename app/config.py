@@ -3,21 +3,22 @@ import logging
 import random
 from dotenv import load_dotenv
 
+# 加载环境变量
 load_dotenv()
+
+# 获取环境变量值，支持大小写不敏感，空值返回默认值。
+def get_env_value(key, default=None):
+    value = os.getenv(key) or os.getenv(key.lower()) or os.getenv(key.upper())
+    return default if value in [None, ''] else value
 
 IGNORED_MODEL_NAMES = ["gpt-4", "gpt-3.5", "websearch", "dall-e-3", "gpt-4o"]
 IMAGE_MODEL_NAMES = ["dalle3", "dalle-3", "dall-e-3"]
-AUTH_TOKEN = os.getenv("AUTHORIZATION")
-# G_TOKEN = os.getenv("G_TOKEN")
-G_TOKEN = None
-HISTORY_MSG_LIMIT = os.getenv("HISTORY_MSG_LIMIT", 0)
-HTTP_PROXIES = os.getenv("HTTP_PROXIES")
-HTTPS_PROXIES = os.getenv("HTTPS_PROXIES")
-SOCKS_PROXIES = os.getenv("SOCKS_PROXIES")
-RECAPTCHA_SECRET = os.getenv("RECAPTCHA_SECRET")
+AUTH_TOKEN = get_env_value("AUTHORIZATION")
+G_TOKEN = get_env_value("G_TOKEN")
+HISTORY_MSG_LIMIT = get_env_value("HISTORY_MSG_LIMIT", 0)
+RECAPTCHA_SECRET = get_env_value("RECAPTCHA_SECRET")
 POPAI_BASE_URL = "https://www.popai.pro/"
 log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
-
 
 def configure_logging():
     extended_log_format = (
@@ -28,15 +29,14 @@ def configure_logging():
 
 
 def _get_proxies_from_env(env_var):
-    proxies = os.getenv(env_var, '')
+    proxies = get_env_value(env_var, '')
     return [proxy.strip() for proxy in proxies.split(',') if proxy.strip()]
 
 
 class ProxyPool:
     def __init__(self):
-        self.http_proxies = _get_proxies_from_env('HTTP_PROXIES')
-        self.https_proxies = _get_proxies_from_env('HTTPS_PROXIES')
-        self.socks_proxies = _get_proxies_from_env('SOCKS_PROXIES')
+        self.http_proxies = _get_proxies_from_env('HTTP_PROXY')
+        self.https_proxies = _get_proxies_from_env('HTTPS_PROXY')
 
     def get_random_proxy(self):
         proxy = {}
@@ -44,11 +44,12 @@ class ProxyPool:
             proxy['http'] = random.choice(self.http_proxies)
         if self.https_proxies:
             proxy['https'] = random.choice(self.https_proxies)
-        if self.socks_proxies:
-            socks_proxy = random.choice(self.socks_proxies)
-            proxy['http'] = socks_proxy
-            proxy['https'] = socks_proxy
-
-        logging.info("proxy URL %s", proxy)
+        
+        # 若只存在一个键，使用其值填充另一个
+        if 'http' in proxy or 'https' in proxy:
+            proxy.setdefault('http', proxy.get('https'))
+            proxy.setdefault('https', proxy.get('http'))
+    
+        # logging.info("proxy URL %s", proxy)
 
         return proxy if proxy else None

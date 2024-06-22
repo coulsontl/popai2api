@@ -38,7 +38,7 @@ docker run --name popai2api --restart=always -d -p 3000:3000 -e AUTHORIZATION = 
 ## draw
 
 ```text
-curl --location --request GET 'http://127.0.0.1:3034/v1/chat/completions' \
+curl --location --request GET 'http://127.0.0.1:3000/v1/chat/completions' \
 --header 'Authorization: Bearer none' \
 --header 'Content-Type: application/json' \
 --data-raw '{
